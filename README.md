@@ -20,6 +20,8 @@ exports CSV and Excel files without third-party dependencies.
 - Writes both CSV and XLSX using the Python standard library only.
 - Accepts an optional HTTP(S) proxy for environments that require tunnelling
   outbound requests.
+- Provides `--debug` logging and a `--diagnose` command to inspect timing,
+  payload size, and parsing statistics without exporting files.
 
 ### Usage
 
@@ -30,6 +32,16 @@ python messe_dusseldorf_scraper.py \
   --output-csv caravan.csv \
   --output-xlsx caravan.xlsx \
   --proxy "http://127.0.0.1:8080"
+```
+
+### Debugging & health checks
+
+To quickly verify connectivity and page structure without producing CSV/XLSX
+files, run the diagnostics mode.  It prints a JSON report with download timing,
+payload size, detected JSON blobs, and sample record metadata:
+
+```bash
+python messe_dusseldorf_scraper.py --page-url "https://www.caravan-salon.com/vis/v1/en/exhprofiles/" --diagnose --debug
 ```
 
 ## Expomed Istanbul scraper

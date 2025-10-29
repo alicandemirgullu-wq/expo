@@ -301,6 +301,85 @@ class MesseDuesseldorfScraper:
             logger.warning("No exhibitor entries detected. Check the input URL.")
         return records
 
+    def diagnose(self) -> Dict[str, Any]:
+        """Gather quick diagnostics to aid debugging and stability checks."""
+
+        diagnostics: Dict[str, Any] = {
+            "page_url": self.config.page_url,
+            "proxy": self.config.proxy or "",
+            "user_agent": self.config.user_agent,
+            "retries": self.config.retries,
+            "delay": self.config.delay,
+        }
+
+        download_start = time.perf_counter()
+        try:
+            html = self._fetch_text(self.config.page_url)
+        except Exception as exc:  # pragma: no cover - network errors depend on runtime
+            diagnostics.update(
+                {
+                    "download_success": False,
+                    "error": str(exc),
+                }
+            )
+            return diagnostics
+
+        download_elapsed = time.perf_counter() - download_start
+        diagnostics.update(
+            {
+                "download_success": True,
+                "download_seconds": round(download_elapsed, 3),
+                "download_bytes": len(html.encode("utf-8")),
+                "html_characters": len(html),
+            }
+        )
+
+        self._page_html = html
+
+        parse_start = time.perf_counter()
+        json_objects = self._extract_json_objects(html)
+        candidate_lengths: List[int] = []
+        for obj in json_objects:
+            candidates = self._find_candidate_records(obj)
+            if candidates:
+                candidate_lengths.append(len(candidates))
+        json_elapsed = time.perf_counter() - parse_start
+        diagnostics.update(
+            {
+                "embedded_json_objects": len(json_objects),
+                "candidate_lengths": candidate_lengths,
+                "embedded_json_parse_seconds": round(json_elapsed, 3),
+            }
+        )
+
+        records = self._collect_from_embedded_json()
+        diagnostics["normalised_records"] = len(records)
+        if records:
+            sample = records[0]
+            diagnostics["sample_record"] = {
+                "company_name": sample.company_name,
+                "profile_url": sample.profile_url,
+                "category_count": len(sample.categories),
+                "contact_count": len(sample.contacts),
+            }
+
+        fallback_start = time.perf_counter()
+        fallback_records = self._collect_from_html_cards()
+        fallback_elapsed = time.perf_counter() - fallback_start
+        diagnostics.update(
+            {
+                "fallback_records": len(fallback_records),
+                "fallback_parse_seconds": round(fallback_elapsed, 3),
+            }
+        )
+        if fallback_records:
+            diagnostics.setdefault("sample_fallback_record", {
+                "company_name": fallback_records[0].company_name,
+                "company_address": fallback_records[0].company_address,
+            })
+
+        return diagnostics
+
     # ------------------------------------------------------------------
     # Embedded JSON parsing
     # ------------------------------------------------------------------
@@ -832,18 +911,31 @@ class MesseDuesseldorfScraper:
 
         for attempt in range(1, self.config.retries + 1):
             request = Request(url, headers=headers)
+            start_time = time.perf_counter()
             try:
                 opener = self._opener.open if self._opener else urlopen
                 with closing(opener(request, timeout=REQUEST_TIMEOUT)) as response:
                     charset = response.headers.get_content_charset() or "utf-8"
-                    return response.read().decode(charset, errors="replace")
+                    body = response.read()
+                    elapsed = time.perf_counter() - start_time
+                    logger.debug(
+                        "Fetched %s in %.2fs (attempt %s/%s, %s bytes)",
+                        url,
+                        elapsed,
+                        attempt,
+                        self.config.retries,
+                        len(body),
+                    )
+                    return body.decode(charset, errors="replace")
             except (HTTPError, URLError, TimeoutError) as exc:
                 last_error = exc
+                elapsed = time.perf_counter() - start_time
                 logger.debug(
-                    "Request failed for %s (attempt %s/%s): %s",
+                    "Request failed for %s (attempt %s/%s after %.2fs): %s",
                     url,
                     attempt,
                     self.config.retries,
+                    elapsed,
                     exc,
                 )
                 time.sleep(self.config.delay)
@@ -1097,6 +1189,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         action="store_true",
         help="Enable verbose debug logging for troubleshooting",
     )
+    parser.add_argument(
+        "--diagnose",
+        action="store_true",
+        help="Run diagnostics instead of scraping, printing timing and parsing stats",
+    )
     return parser.parse_args(argv)
 
 
@@ -1119,6 +1216,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
 
     scraper = MesseDuesseldorfScraper(config)
+
+    if getattr(args, "diagnose", False):
+        diagnostics = scraper.diagnose()
+        print(json.dumps(diagnostics, indent=2, ensure_ascii=False))
+        return 0 if diagnostics.get("download_success") else 1
+
     records = scraper.collect()
 
     if config.output_format == "expanded":
