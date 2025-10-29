@@ -18,6 +18,8 @@ exports CSV and Excel files without third-party dependencies.
 - Supports **compact** (single row per exhibitor) and **expanded** (one row per
   product category) output layouts.
 - Writes both CSV and XLSX using the Python standard library only.
+- Accepts an optional HTTP(S) proxy for environments that require tunnelling
+  outbound requests.
 
 ### Usage
 
@@ -26,7 +28,8 @@ python messe_dusseldorf_scraper.py \
   --page-url "https://www.caravan-salon.com/vis/v1/en/exhprofiles/" \
   --output-format expanded \
   --output-csv caravan.csv \
-  --output-xlsx caravan.xlsx
+  --output-xlsx caravan.xlsx \
+  --proxy "http://127.0.0.1:8080"
 ```
 
 ## Expomed Istanbul scraper

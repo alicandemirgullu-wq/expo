@@ -32,6 +32,7 @@ import re
 import time
 import unicodedata
 import zipfile
+from contextlib import closing
 from dataclasses import dataclass, field
 from html import unescape
 from html.parser import HTMLParser
@@ -39,7 +40,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin
-from urllib.request import Request, urlopen
+from urllib.request import OpenerDirector, ProxyHandler, Request, build_opener, urlopen
 
 
 logger = logging.getLogger(__name__)
@@ -156,6 +157,7 @@ class ScraperConfig:
     retries: int = REQUEST_RETRIES
     user_agent: str = "MesseDuesseldorfScraper/1.0 (+https://github.com/openai/)"
     output_format: str = "compact"
+    proxy: Optional[str] = None
 
 
 @dataclass
@@ -271,6 +273,17 @@ class MesseDuesseldorfScraper:
     def __init__(self, config: ScraperConfig) -> None:
         self.config = config
         self._page_html: Optional[str] = None
+        self._opener = self._build_opener()
+
+    def _build_opener(self) -> Optional[OpenerDirector]:
+        if not self.config.proxy:
+            return None
+        proxy_address = self.config.proxy.strip()
+        if not proxy_address:
+            return None
+        proxies = {"http": proxy_address, "https": proxy_address}
+        logger.debug("Using proxy %s", proxy_address)
+        return build_opener(ProxyHandler(proxies))
 
     def collect(self) -> List[ExhibitorRecord]:
         """Collect exhibitor records using embedded JSON and HTML fallbacks."""
@@ -820,7 +833,8 @@ class MesseDuesseldorfScraper:
         for attempt in range(1, self.config.retries + 1):
             request = Request(url, headers=headers)
             try:
-                with urlopen(request, timeout=REQUEST_TIMEOUT) as response:
+                opener = self._opener.open if self._opener else urlopen
+                with closing(opener(request, timeout=REQUEST_TIMEOUT)) as response:
                     charset = response.headers.get_content_charset() or "utf-8"
                     return response.read().decode(charset, errors="replace")
             except (HTTPError, URLError, TimeoutError) as exc:
@@ -1072,6 +1086,13 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Custom User-Agent header",
     )
     parser.add_argument(
+        "--proxy",
+        help=(
+            "HTTP/HTTPS proxy URL, for example http://user:pass@host:port. "
+            "Applied to all outbound requests."
+        ),
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Enable verbose debug logging for troubleshooting",
@@ -1094,6 +1115,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         retries=args.retries,
         user_agent=args.user_agent,
         output_format=args.output_format,
+        proxy=args.proxy,
     )
 
     scraper = MesseDuesseldorfScraper(config)
